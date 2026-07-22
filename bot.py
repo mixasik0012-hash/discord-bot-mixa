@@ -391,4 +391,5 @@ async def vmutes_list(interaction: discord.Interaction):
 # =============================================
 # ЗАПУСК
 # =============================================
-bot.run('MTUyOTU0NTMxNjAwMzQ3OTg0Mw.G0XDKC._Xq_b2UAhOeEk7ywaPpyTegO4P5smm7IQkFn3Q')
+import os
+bot.run(os.getenv("BOT_TOKEN"))
