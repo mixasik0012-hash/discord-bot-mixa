@@ -7,7 +7,7 @@ import asyncio
 import re
 
 # Настройки
-ALLOWED_ROLES = ["Модератор", "Админ", "Главный"]
+ALLOWED_ROLES = ["⚔️Админ состав⚔️"]
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
