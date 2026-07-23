@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Выбор сервера</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #1a1a2e, #16213e, #0f3460);
+            color: #fff;
+            min-height: 100vh;
+        }
+        .navbar {
+            background: rgba(0,0,0,0.3);
+            backdrop-filter: blur(10px);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .navbar-brand { color: #5865F2; text-decoration: none; font-weight: bold; font-size: 1.3rem; }
+        .user-info { display: flex; align-items: center; gap: 1rem; }
+        .user-avatar { width: 40px; height: 40px; border-radius: 50%; }
+        .user-name { font-weight: 600; }
+        .container { max-width: 800px; margin: 2rem auto; padding: 1rem; }
+        .container h1 { margin-bottom: 1.5rem; text-align: center; }
+        .server-card {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            text-decoration: none;
+            color: white;
+            border: 1px solid rgba(255,255,255,0.1);
+            transition: all 0.3s;
+        }
+        .server-card:hover {
+            background: rgba(88,101,242,0.1);
+            border-color: #5865F2;
+            transform: translateX(5px);
+        }
+        .server-icon {
+            width: 50px;
+            height: 50px;
+            border-radius: 12px;
+            background: #5865F2;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+        }
+        .server-name { font-weight: bold; font-size: 1.1rem; }
+        .btn-logout {
+            background: #ef4444;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 6px;
+            text-decoration: none;
+            font-weight: 600;
+        }
+        .btn-logout:hover { background: #dc2626; }
+        .no-servers {
+            text-align: center;
+            color: #a0aec0;
+            padding: 3rem;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <a href="/" class="navbar-brand">🤖 Mixasik</a>
+        <div class="user-info">
+            <img src="{{ user.avatar }}" alt="Avatar" class="user-avatar">
+            <span class="user-name">{{ user.username }}</span>
+            <a href="/logout" class="btn-logout">Выйти</a>
+        </div>
+    </nav>
+
+    <div class="container">
+        <h1>📋 Выберите сервер</h1>
+        {% if guilds %}
+            {% for guild in guilds %}
+            <a href="/dashboard/{{ guild.id }}" class="server-card">
+                <div class="server-icon">
+                    {% if guild.icon %}
+                    <img src="https://cdn.discordapp.com/icons/{{ guild.id }}/{{ guild.icon }}.png" style="width:50px;height:50px;border-radius:12px;">
+                    {% else %}
+                    🏠
+                    {% endif %}
+                </div>
+                <div>
+                    <div class="server-name">{{ guild.name }}</div>
+                </div>
+            </a>
+            {% endfor %}
+        {% else %}
+            <div class="no-servers">
+                <p>😔 У вас нет серверов с правами администратора</p>
+            </div>
+        {% endif %}
+    </div>
+</body>
+</html>
