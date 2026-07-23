@@ -9,11 +9,11 @@ app.secret_key = os.urandom(24).hex()
 CORS(app)
 
 CLIENT_ID = "1529545316003479843"
-CLIENT_SECRET = "OZxiSNFpg3-CR7Gyf-NY2H9lXgEz3zg8"
-REDIRECT_URI = "http://localhost:5000/callback"
-BOT_TOKEN = "MTUyOTU0NTMxNjAwMzQ3OTg0Mw.GGxZtW.c2VakjBQ5qeDpxp_mXac-STp8x31Isgb-0PbEg"
+CLIENT_SECRET = os.getenv("OZxiSNFpg3-CR7Gyf-NY2H9lXgEz3zg8", "")
+REDIRECT_URI = os.getenv("REDIRECT_URI", "http://localhost:5000/callback")
+BOT_TOKEN = os.getenv("MTUyOTU0NTMxNjAwMzQ3OTg0Mw.GGxZtW.c2VakjBQ5qeDpxp_mXac-STp8x31Isgb-0PbEg", "")
 API_BASE = "https://discord.com/api/v10"
-DB_FILE = "bot_data.db"
+DB_FILE = "/data/bot_data.db" if os.path.exists("/data") else "bot_data.db"
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
@@ -27,9 +27,9 @@ leave_channel_id TEXT,
 leave_text TEXT DEFAULT '😢 {user} покинул нас...',
 log_channel_id TEXT,
 leveling_enabled INTEGER DEFAULT 0,
-welcome_enabled INTEGER DEFAULT 1,
-leave_enabled INTEGER DEFAULT 1,
-logging_enabled INTEGER DEFAULT 1,
+welcome_enabled INTEGER DEFAULT 0,
+leave_enabled INTEGER DEFAULT 0,
+logging_enabled INTEGER DEFAULT 0,
 automod_enabled INTEGER DEFAULT 0,
 temp_channels_enabled INTEGER DEFAULT 0,
 temp_channel_category_id TEXT,
@@ -49,34 +49,6 @@ levels_roles TEXT DEFAULT '',
 tempchannels_roles TEXT DEFAULT '',
 automod_roles TEXT DEFAULT ''
 )''')
-    
-    c.execute('''CREATE TABLE IF NOT EXISTS warnings (
-id INTEGER PRIMARY KEY AUTOINCREMENT,
-guild_id TEXT,
-user_id TEXT,
-reason TEXT,
-moderator TEXT,
-date TEXT
-)''')
-    
-    c.execute('''CREATE TABLE IF NOT EXISTS mutes (
-guild_id TEXT,
-user_id TEXT,
-until TEXT,
-reason TEXT,
-moderator TEXT,
-date TEXT
-)''')
-    
-    c.execute('''CREATE TABLE IF NOT EXISTS voice_mutes (
-guild_id TEXT,
-user_id TEXT,
-until TEXT,
-reason TEXT,
-moderator TEXT,
-date TEXT
-)''')
-    
     conn.commit()
     conn.close()
 
@@ -110,29 +82,29 @@ def login_required(f):
 
 def get_user_guilds(token):
     headers = {'Authorization': f'Bearer {token}'}
-    r = requests.get(f'{API_BASE}/users/@me/guilds', headers=headers)
+    r = requests.get(f'{API_BASE}/users/@me/guilds', headers=headers, timeout=10)
     return r.json() if r.ok else []
 
 def get_guild_roles(guild_id):
     headers = {'Authorization': f'Bot {BOT_TOKEN}'}
-    r = requests.get(f'{API_BASE}/guilds/{guild_id}/roles', headers=headers)
+    r = requests.get(f'{API_BASE}/guilds/{guild_id}/roles', headers=headers, timeout=10)
     return r.json() if r.ok else []
 
 def get_guild_channels(guild_id):
     headers = {'Authorization': f'Bot {BOT_TOKEN}'}
-    r = requests.get(f'{API_BASE}/guilds/{guild_id}/channels', headers=headers)
+    r = requests.get(f'{API_BASE}/guilds/{guild_id}/channels', headers=headers, timeout=10)
     return r.json() if r.ok else []
 
 def get_user_info(token):
     headers = {'Authorization': f'Bearer {token}'}
-    r = requests.get(f'{API_BASE}/users/@me', headers=headers)
+    r = requests.get(f'{API_BASE}/users/@me', headers=headers, timeout=10)
     return r.json() if r.ok else None
 
 def exchange_code(code):
     data = {'client_id': CLIENT_ID, 'client_secret': CLIENT_SECRET,
             'grant_type': 'authorization_code', 'code': code, 'redirect_uri': REDIRECT_URI}
     headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-    r = requests.post(f'{API_BASE}/oauth2/token', data=data, headers=headers)
+    r = requests.post(f'{API_BASE}/oauth2/token', data=data, headers=headers, timeout=10)
     return r.json() if r.ok else None
 
 @app.route('/')
@@ -165,8 +137,7 @@ def logout():
 @login_required
 def select_server():
     guilds = get_user_guilds(session['access_token'])
-    admin = [g for g in guilds if (int(g['permissions']) & 0x8) == 0x8]
-    return render_template('servers.html', user=session['user'], guilds=admin)
+    return render_template('servers.html', user=session['user'], guilds=guilds)
 
 @app.route('/dashboard/<guild_id>')
 @login_required
@@ -194,9 +165,9 @@ def dashboard(guild_id):
             'leave_text': result[5] if len(result) > 5 else '😢 {user} покинул нас...',
             'log_channel_id': result[6] if len(result) > 6 else '',
             'leveling_enabled': result[7] if len(result) > 7 else 0,
-            'welcome_enabled': result[8] if len(result) > 8 else 1,
-            'leave_enabled': result[9] if len(result) > 9 else 1,
-            'logging_enabled': result[10] if len(result) > 10 else 1,
+            'welcome_enabled': result[8] if len(result) > 8 else 0,
+            'leave_enabled': result[9] if len(result) > 9 else 0,
+            'logging_enabled': result[10] if len(result) > 10 else 0,
             'automod_enabled': result[11] if len(result) > 11 else 0,
             'temp_channels_enabled': result[12] if len(result) > 12 else 0,
             'temp_channel_category_id': result[13] if len(result) > 13 else '',
@@ -242,7 +213,7 @@ def save_settings(guild_id):
          request.form.get('leveling_enabled', '0'),
          request.form.get('welcome_enabled', '0'),
          request.form.get('leave_enabled', '0'),
-         request.form.get('logging_enabled', '1'),
+         request.form.get('logging_enabled', '0'),
          request.form.get('automod_enabled', '0'),
          request.form.get('temp_channels_enabled', '0'),
          request.form.get('temp_channel_category_id', ''),
@@ -264,4 +235,5 @@ def save_settings(guild_id):
     return redirect(url_for('dashboard', guild_id=guild_id))
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
