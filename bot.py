@@ -40,8 +40,15 @@ automod_anti_caps INTEGER DEFAULT 0,
 automod_caps_percent INTEGER DEFAULT 70,
 automod_anti_links INTEGER DEFAULT 0,
 automod_bad_words TEXT DEFAULT '',
-moderator_role_id TEXT DEFAULT '',
-temp_creator_channel_name TEXT DEFAULT '⚙️Создать канал [+]⚙️'
+moderator_role_ids TEXT DEFAULT '',
+temp_creator_channel_name TEXT DEFAULT '⚙️Создать канал [+]⚙️',
+welcome_roles TEXT DEFAULT '',
+leave_roles TEXT DEFAULT '',
+logging_roles TEXT DEFAULT '',
+autorole_roles TEXT DEFAULT '',
+levels_roles TEXT DEFAULT '',
+tempchannels_roles TEXT DEFAULT '',
+automod_roles TEXT DEFAULT ''
 )''')
     c.execute('''CREATE TABLE IF NOT EXISTS warnings (
 id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT, user_id TEXT,
@@ -119,7 +126,6 @@ def has_permission(interaction: discord.Interaction) -> bool:
         user_roles = [str(role.id) for role in interaction.user.roles]
         if any(rid in user_roles for rid in allowed_ids):
             return True
-    # Стандартная проверка
     user_roles = [role.name for role in interaction.user.roles]
     return any(role in ALLOWED_ROLES for role in user_roles)
 
@@ -130,14 +136,6 @@ def has_permission_simple(member, guild_id):
         user_roles = [str(role.id) for role in member.roles]
         if any(rid in user_roles for rid in allowed_ids):
             return True
-    user_roles = [role.name for role in member.roles]
-    return any(role in ALLOWED_ROLES for role in user_roles)
-
-def has_permission_simple(member, guild_id):
-    mod_role_id = get_setting(guild_id, "moderator_role_id")
-    if mod_role_id:
-        user_roles = [str(role.id) for role in member.roles]
-        return mod_role_id in user_roles
     user_roles = [role.name for role in member.roles]
     return any(role in ALLOWED_ROLES for role in user_roles)
 
@@ -289,7 +287,7 @@ async def on_voice_state_update(member, before, after):
     if not get_setting(guild_id, "temp_channels_enabled"): return
     if after.channel:
         creator_name = get_setting(guild_id, "temp_creator_channel_name") or "⚙️Создать канал [+]⚙️"
-        if after.channel.name.lower() == creator_name.lower():
+        if "создать" in after.channel.name.lower() or after.channel.name.lower() == creator_name.lower():
             category_id = get_setting(guild_id, "temp_channel_category_id")
             temp_name = get_setting(guild_id, "temp_channel_name") or "🔊 Временный"
             category = member.guild.get_channel(int(category_id)) if category_id else None
