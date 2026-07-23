@@ -113,11 +113,24 @@ def format_time(minutes: int) -> str:
 
 def has_permission(interaction: discord.Interaction) -> bool:
     guild_id = str(interaction.guild.id)
-    mod_role_id = get_setting(guild_id, "moderator_role_id")
-    if mod_role_id:
+    mod_role_ids = get_setting(guild_id, "moderator_role_ids")
+    if mod_role_ids:
+        allowed_ids = [rid.strip() for rid in mod_role_ids.split(",") if rid.strip()]
         user_roles = [str(role.id) for role in interaction.user.roles]
-        return mod_role_id in user_roles
+        if any(rid in user_roles for rid in allowed_ids):
+            return True
+    # Стандартная проверка
     user_roles = [role.name for role in interaction.user.roles]
+    return any(role in ALLOWED_ROLES for role in user_roles)
+
+def has_permission_simple(member, guild_id):
+    mod_role_ids = get_setting(guild_id, "moderator_role_ids")
+    if mod_role_ids:
+        allowed_ids = [rid.strip() for rid in mod_role_ids.split(",") if rid.strip()]
+        user_roles = [str(role.id) for role in member.roles]
+        if any(rid in user_roles for rid in allowed_ids):
+            return True
+    user_roles = [role.name for role in member.roles]
     return any(role in ALLOWED_ROLES for role in user_roles)
 
 def has_permission_simple(member, guild_id):
