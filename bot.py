@@ -1,39 +1,127 @@
 import discord
 from discord import app_commands
-import json
+import sqlite3
 import os
 from datetime import datetime, timedelta
 import asyncio
 import re
+import random
 
-# Настройки
-ALLOWED_ROLES = ["⚔️Админ состав⚔️"]
+# =============================================
+# НАСТРОЙКИ
+# =============================================
+ALLOWED_ROLES = ["Модератор", "Админ", "Главный"]
+BOT_TOKEN = os.getenv("BOT_TOKEN", "ТОКЕН_СЮДА_ЗАМЕНИТЕ")
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not BOT_TOKEN:
-    print("❌ Ошибка: BOT_TOKEN не найден!")
-    exit(1)
+DB_FILE = "/data/bot_data.db" if os.path.exists("/data") else "bot_data.db"
 
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 intents.voice_states = True
 
-WARNINGS_FILE = "/data/warnings.json"
-MUTES_FILE = "/data/mutes.json"
-VOICE_MUTES_FILE = "/data/voice_mutes.json"
-SETTINGS_FILE = "/data/server_settings.json"
+# =============================================
+# БАЗА ДАННЫХ
+# =============================================
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    
+    # Настройки сервера
+    c.execute('''CREATE TABLE IF NOT EXISTS server_settings (
+        guild_id TEXT PRIMARY KEY,
+        auto_role_id TEXT,
+        welcome_channel_id TEXT,
+        welcome_text TEXT DEFAULT '👋 Добро пожаловать, {user}!',
+        leave_channel_id TEXT,
+        leave_text TEXT DEFAULT '😢 {user} покинул нас...',
+        log_channel_id TEXT,
+        leveling_enabled INTEGER DEFAULT 0
+    )''')
+    
+    # Варны
+    c.execute('''CREATE TABLE IF NOT EXISTS warnings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id TEXT,
+        user_id TEXT,
+        reason TEXT,
+        moderator TEXT,
+        date TEXT
+    )''')
+    
+    # Мьюты (таймауты)
+    c.execute('''CREATE TABLE IF NOT EXISTS mutes (
+        guild_id TEXT,
+        user_id TEXT,
+        until TEXT,
+        reason TEXT,
+        moderator TEXT,
+        date TEXT
+    )''')
+    
+    # Голосовые мьюты
+    c.execute('''CREATE TABLE IF NOT EXISTS voice_mutes (
+        guild_id TEXT,
+        user_id TEXT,
+        until TEXT,
+        reason TEXT,
+        moderator TEXT,
+        date TEXT
+    )''')
+    
+    # Уровни
+    c.execute('''CREATE TABLE IF NOT EXISTS user_levels (
+        guild_id TEXT,
+        user_id TEXT,
+        xp INTEGER DEFAULT 0,
+        level INTEGER DEFAULT 1,
+        PRIMARY KEY (guild_id, user_id)
+    )''')
+    
+    # Reaction Roles
+    c.execute('''CREATE TABLE IF NOT EXISTS reaction_roles (
+        guild_id TEXT,
+        message_id TEXT,
+        channel_id TEXT,
+        emoji TEXT,
+        role_id TEXT
+    )''')
+    
+    conn.commit()
+    conn.close()
 
-def load_json(file):
-    if os.path.exists(file):
-        with open(file, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+init_db()
 
-def save_json(file, data):
-    os.makedirs(os.path.dirname(file), exist_ok=True)
-    with open(file, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+# =============================================
+# ФУНКЦИИ БД
+# =============================================
+def db_execute(query, params=(), fetch=False):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute(query, params)
+    if fetch:
+        result = c.fetchall()
+    else:
+        result = None
+    conn.commit()
+    conn.close()
+    return result
+
+def db_execute_one(query, params=()):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute(query, params)
+    result = c.fetchone()
+    conn.commit()
+    conn.close()
+    return result
+
+def get_setting(guild_id, key):
+    result = db_execute_one(f"SELECT {key} FROM server_settings WHERE guild_id = ?", (str(guild_id),))
+    return result[0] if result else None
+
+def set_setting(guild_id, key, value):
+    db_execute(f"INSERT OR REPLACE INTO server_settings (guild_id, {key}) VALUES (?, ?)", (str(guild_id), value))
 
 def parse_time(time_str: str) -> int:
     time_str = time_str.lower().strip()
@@ -63,6 +151,9 @@ def has_permission(interaction: discord.Interaction) -> bool:
     user_roles = [role.name for role in interaction.user.roles]
     return any(role in ALLOWED_ROLES for role in user_roles)
 
+# =============================================
+# БОТ
+# =============================================
 class MyBot(discord.Client):
     def __init__(self):
         super().__init__(intents=intents)
@@ -72,31 +163,21 @@ class MyBot(discord.Client):
         print('✅ Команды синхронизированы!')
 
 bot = MyBot()
-warnings = load_json(WARNINGS_FILE)
-mutes = load_json(MUTES_FILE)
-voice_mutes = load_json(VOICE_MUTES_FILE)
-server_settings = load_json(SETTINGS_FILE)
 
-async def check_timeouts():
+async def check_mutes():
     await bot.wait_until_ready()
     while not bot.is_closed():
         try:
             now = datetime.now().isoformat()
-            to_remove = []
-            for guild_id in list(mutes.keys()):
-                for user_id, mute_data in list(mutes[guild_id].items()):
-                    if mute_data["until"] <= now:
-                        try:
-                            guild = bot.get_guild(int(guild_id))
-                            if guild:
-                                member = guild.get_member(int(user_id))
-                                if member: await member.timeout(None)
-                        except: pass
-                        to_remove.append((guild_id, user_id))
-            for guild_id, user_id in to_remove:
-                if guild_id in mutes and user_id in mutes[guild_id]: del mutes[guild_id][user_id]
-                if guild_id in mutes and len(mutes[guild_id]) == 0: del mutes[guild_id]
-            if to_remove: save_json(MUTES_FILE, mutes)
+            expired = db_execute("SELECT guild_id, user_id FROM mutes WHERE until <= ?", (now,), fetch=True)
+            for guild_id, user_id in expired:
+                try:
+                    guild = bot.get_guild(int(guild_id))
+                    if guild:
+                        member = guild.get_member(int(user_id))
+                        if member: await member.timeout(None)
+                except: pass
+                db_execute("DELETE FROM mutes WHERE guild_id = ? AND user_id = ? AND until <= ?", (guild_id, user_id, now))
         except: pass
         await asyncio.sleep(30)
 
@@ -105,95 +186,184 @@ async def check_voice_mutes():
     while not bot.is_closed():
         try:
             now = datetime.now().isoformat()
-            to_remove = []
-            for guild_id in list(voice_mutes.keys()):
-                for user_id, vmute_data in list(voice_mutes[guild_id].items()):
-                    if vmute_data["until"] <= now:
-                        try:
-                            guild = bot.get_guild(int(guild_id))
-                            if guild:
-                                member = guild.get_member(int(user_id))
-                                if member: await member.edit(mute=False)
-                        except: pass
-                        to_remove.append((guild_id, user_id))
-            for guild_id, user_id in to_remove:
-                if guild_id in voice_mutes and user_id in voice_mutes[guild_id]: del voice_mutes[guild_id][user_id]
-                if guild_id in voice_mutes and len(voice_mutes[guild_id]) == 0: del voice_mutes[guild_id]
-            if to_remove: save_json(VOICE_MUTES_FILE, voice_mutes)
+            expired = db_execute("SELECT guild_id, user_id FROM voice_mutes WHERE until <= ?", (now,), fetch=True)
+            for guild_id, user_id in expired:
+                try:
+                    guild = bot.get_guild(int(guild_id))
+                    if guild:
+                        member = guild.get_member(int(user_id))
+                        if member: await member.edit(mute=False)
+                except: pass
+                db_execute("DELETE FROM voice_mutes WHERE guild_id = ? AND user_id = ? AND until <= ?", (guild_id, user_id, now))
         except: pass
         await asyncio.sleep(30)
 
 @bot.event
 async def on_ready():
     print(f'🚀 Бот {bot.user} готов к работе! 24/7')
-    bot.loop.create_task(check_timeouts())
+    bot.loop.create_task(check_mutes())
     bot.loop.create_task(check_voice_mutes())
 
+# =============================================
+# ПРИВЕТСТВИЯ / ПРОЩАНИЯ / ЛОГИ / АВТО-РОЛЬ
+# =============================================
 @bot.event
 async def on_member_join(member):
     guild_id = str(member.guild.id)
-    if guild_id in server_settings:
-        auto_role_id = server_settings[guild_id].get("auto_role")
-        if auto_role_id:
-            role = member.guild.get_role(int(auto_role_id))
-            if role:
-                try:
-                    await member.add_roles(role)
-                except: pass
+    
+    # Авто-роль
+    auto_role_id = get_setting(guild_id, "auto_role_id")
+    if auto_role_id:
+        role = member.guild.get_role(int(auto_role_id))
+        if role:
+            try: await member.add_roles(role)
+            except: pass
+    
+    # Приветствие
+    welcome_channel_id = get_setting(guild_id, "welcome_channel_id")
+    welcome_text = get_setting(guild_id, "welcome_text") or "👋 Добро пожаловать, {user}!"
+    if welcome_channel_id:
+        channel = member.guild.get_channel(int(welcome_channel_id))
+        if channel:
+            text = welcome_text.replace("{user}", member.mention).replace("{server}", member.guild.name)
+            embed = discord.Embed(title="👋 Новый участник!", description=text, color=0x57F287)
+            embed.add_field(name="Всего участников", value=str(member.guild.member_count))
+            embed.set_thumbnail(url=member.display_avatar.url)
+            await channel.send(embed=embed)
+    
+    # Лог
+    log_channel_id = get_setting(guild_id, "log_channel_id")
+    if log_channel_id:
+        log_channel = member.guild.get_channel(int(log_channel_id))
+        if log_channel:
+            embed = discord.Embed(title="📥 Участник присоединился", color=0x57F287)
+            embed.add_field(name="Пользователь", value=f"{member.mention} ({member.name})")
+            embed.set_footer(text=f"ID: {member.id}")
+            await log_channel.send(embed=embed)
 
+@bot.event
+async def on_member_remove(member):
+    guild_id = str(member.guild.id)
+    
+    # Прощание
+    leave_channel_id = get_setting(guild_id, "leave_channel_id")
+    leave_text = get_setting(guild_id, "leave_text") or "😢 {user} покинул нас..."
+    if leave_channel_id:
+        channel = member.guild.get_channel(int(leave_channel_id))
+        if channel:
+            text = leave_text.replace("{user}", member.mention).replace("{server}", member.guild.name)
+            await channel.send(embed=discord.Embed(title="😢 Участник ушёл", description=text, color=0xED4245))
+    
+    # Лог
+    log_channel_id = get_setting(guild_id, "log_channel_id")
+    if log_channel_id:
+        log_channel = member.guild.get_channel(int(log_channel_id))
+        if log_channel:
+            embed = discord.Embed(title="📤 Участник вышел", color=0xED4245)
+            embed.add_field(name="Пользователь", value=f"{member.mention} ({member.name})")
+            embed.set_footer(text=f"ID: {member.id}")
+            await log_channel.send(embed=embed)
+
+# =============================================
+# УРОВНИ
+# =============================================
+@bot.event
+async def on_message(message):
+    if message.author.bot: return
+    
+    guild_id = str(message.guild.id)
+    user_id = str(message.author.id)
+    
+    # Проверяем, включены ли уровни
+    leveling_enabled = get_setting(guild_id, "leveling_enabled")
+    if leveling_enabled:
+        xp = random.randint(5, 15)
+        result = db_execute_one("SELECT xp, level FROM user_levels WHERE guild_id = ? AND user_id = ?", (guild_id, user_id))
+        
+        if result:
+            current_xp, current_level = result
+            new_xp = current_xp + xp
+            xp_needed = current_level * 100
+            if new_xp >= xp_needed:
+                new_level = current_level + 1
+                db_execute("UPDATE user_levels SET xp = ?, level = ? WHERE guild_id = ? AND user_id = ?", 
+                          (new_xp - xp_needed, new_level, guild_id, user_id))
+                
+                # Оповещение о новом уровне
+                level_channel_id = get_setting(guild_id, "welcome_channel_id")
+                if level_channel_id:
+                    channel = message.guild.get_channel(int(level_channel_id))
+                    if channel:
+                        await channel.send(f"🎉 {message.author.mention} достиг уровня **{new_level}**!")
+            else:
+                db_execute("UPDATE user_levels SET xp = ? WHERE guild_id = ? AND user_id = ?", (new_xp, guild_id, user_id))
+        else:
+            db_execute("INSERT INTO user_levels (guild_id, user_id, xp, level) VALUES (?, ?, ?, ?)", (guild_id, user_id, xp, 1))
+
+# =============================================
 # ВАРНЫ
+# =============================================
 @bot.tree.command(name="warn", description="Выдать предупреждение")
 @app_commands.describe(user="Кому", reason="Причина")
 async def warn(interaction: discord.Interaction, user: discord.Member, reason: str = "Не указана"):
     if not has_permission(interaction):
         await interaction.response.send_message("❌ Нет прав.", ephemeral=True)
         return
+    
     guild_id = str(interaction.guild.id)
     user_id = str(user.id)
-    if guild_id not in warnings: warnings[guild_id] = {}
-    if user_id not in warnings[guild_id]: warnings[guild_id][user_id] = []
-    warn_entry = {"reason": reason, "moderator": interaction.user.name, "date": datetime.now().strftime("%d.%m.%Y %H:%M:%S"), "id": len(warnings[guild_id][user_id]) + 1}
-    warnings[guild_id][user_id].append(warn_entry)
-    save_json(WARNINGS_FILE, warnings)
+    date = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+    
+    db_execute("INSERT INTO warnings (guild_id, user_id, reason, moderator, date) VALUES (?, ?, ?, ?, ?)",
+              (guild_id, user_id, reason, interaction.user.name, date))
+    
+    count = db_execute_one("SELECT COUNT(*) FROM warnings WHERE guild_id = ? AND user_id = ?", (guild_id, user_id))[0]
+    
     embed = discord.Embed(title="⚠️ Предупреждение выдано", color=0xFFA500)
     embed.add_field(name="Пользователь", value=user.mention)
     embed.add_field(name="Причина", value=reason)
-    embed.add_field(name="Всего варнов", value=str(len(warnings[guild_id][user_id])))
+    embed.add_field(name="Всего варнов", value=str(count))
     await interaction.response.send_message(embed=embed)
+    
+    # Лог
+    log_channel_id = get_setting(guild_id, "log_channel_id")
+    if log_channel_id:
+        log_channel = interaction.guild.get_channel(int(log_channel_id))
+        if log_channel:
+            await log_channel.send(embed=discord.Embed(title="⚠️ Варн", color=0xFFA500)
+                                  .add_field(name="Кому", value=user.mention)
+                                  .add_field(name="Модератор", value=interaction.user.mention)
+                                  .add_field(name="Причина", value=reason))
 
-@bot.tree.command(name="warn_remove", description="Снять предупреждение")
-@app_commands.describe(user="С кого")
+@bot.tree.command(name="warn_remove", description="Снять варн")
 async def warn_remove(interaction: discord.Interaction, user: discord.Member):
     if not has_permission(interaction):
         await interaction.response.send_message("❌ Нет прав.", ephemeral=True)
         return
     guild_id = str(interaction.guild.id)
     user_id = str(user.id)
-    if guild_id in warnings and user_id in warnings[guild_id] and len(warnings[guild_id][user_id]) > 0:
-        warnings[guild_id][user_id].pop()
-        save_json(WARNINGS_FILE, warnings)
-        await interaction.response.send_message(f"✅ Варн снят с {user.mention}")
-    else:
-        await interaction.response.send_message(f"✅ Нет варнов.", ephemeral=True)
+    db_execute("DELETE FROM warnings WHERE guild_id = ? AND user_id = ? AND id = (SELECT id FROM warnings WHERE guild_id = ? AND user_id = ? ORDER BY id DESC LIMIT 1)",
+              (guild_id, user_id, guild_id, user_id))
+    await interaction.response.send_message(f"✅ Последний варн снят с {user.mention}")
 
-@bot.tree.command(name="warnings", description="Посмотреть предупреждения")
-@app_commands.describe(user="Чьи")
+@bot.tree.command(name="warnings", description="Список варнов")
 async def warnings_list(interaction: discord.Interaction, user: discord.Member = None):
-    if user is None: user = interaction.user
+    if not user: user = interaction.user
     guild_id = str(interaction.guild.id)
     user_id = str(user.id)
-    if guild_id in warnings and user_id in warnings[guild_id]:
-        warns = warnings[guild_id][user_id]
+    warns = db_execute("SELECT reason, moderator, date FROM warnings WHERE guild_id = ? AND user_id = ? ORDER BY id DESC", (guild_id, user_id), fetch=True)
+    if warns:
         embed = discord.Embed(title=f"⚠️ Варны: {user.display_name}", color=0xFFA500)
-        for w in warns:
-            embed.add_field(name=f"#{w['id']} | {w['date']}", value=f"Причина: {w['reason']}", inline=False)
+        for i, (reason, moderator, date) in enumerate(warns, 1):
+            embed.add_field(name=f"#{i} | {date}", value=f"Причина: {reason}\nМодератор: {moderator}", inline=False)
         await interaction.response.send_message(embed=embed)
     else:
         await interaction.response.send_message(f"✅ У {user.mention} нет варнов.", ephemeral=True)
 
+# =============================================
 # ТАЙМАУТ
-@bot.tree.command(name="timeout", description="Запретить писать в чат")
-@app_commands.describe(user="Кому", time="Время (30mi, 2h, 1d, 1w, 1mo)", reason="Причина")
+# =============================================
+@bot.tree.command(name="timeout", description="Таймаут")
 async def timeout(interaction: discord.Interaction, user: discord.Member, time: str, reason: str = "Не указана"):
     if not has_permission(interaction):
         await interaction.response.send_message("❌ Нет прав.", ephemeral=True)
@@ -203,46 +373,98 @@ async def timeout(interaction: discord.Interaction, user: discord.Member, time: 
         await interaction.response.send_message("❌ Неверное время.", ephemeral=True)
         return
     await user.timeout(timedelta(minutes=minutes), reason=reason)
-    embed = discord.Embed(title="🔇 Таймаут выдан", color=0xFF6600)
-    embed.add_field(name="Пользователь", value=user.mention)
-    embed.add_field(name="Длительность", value=format_time(minutes))
-    embed.add_field(name="Причина", value=reason)
-    await interaction.response.send_message(embed=embed)
+    
+    guild_id = str(interaction.guild.id)
+    user_id = str(user.id)
+    until = (datetime.now() + timedelta(minutes=minutes)).isoformat()
+    db_execute("INSERT INTO mutes (guild_id, user_id, until, reason, moderator, date) VALUES (?, ?, ?, ?, ?, ?)",
+              (guild_id, user_id, until, reason, interaction.user.name, datetime.now().strftime("%d.%m.%Y %H:%M:%S")))
+    
+    await interaction.response.send_message(f"🔇 {user.mention} таймаут на {format_time(minutes)}")
 
 @bot.tree.command(name="untimeout", description="Снять таймаут")
-@app_commands.describe(user="С кого")
 async def untimeout(interaction: discord.Interaction, user: discord.Member):
-    if not has_permission(interaction):
-        await interaction.response.send_message("❌ Нет прав.", ephemeral=True)
-        return
+    if not has_permission(interaction): return
     await user.timeout(None)
+    db_execute("DELETE FROM mutes WHERE guild_id = ? AND user_id = ?", (str(interaction.guild.id), str(user.id)))
     await interaction.response.send_message(f"🔊 Таймаут снят с {user.mention}")
 
+# =============================================
 # ГОЛОСОВОЙ МЬЮТ
-@bot.tree.command(name="vmute", description="Запретить говорить в войсе")
-@app_commands.describe(user="Кому", time="Время (30mi, 2h, 1d, 1w, 1mo)", reason="Причина")
+# =============================================
+@bot.tree.command(name="vmute", description="Голосовой мьют")
 async def vmute(interaction: discord.Interaction, user: discord.Member, time: str, reason: str = "Не указана"):
-    if not has_permission(interaction):
-        await interaction.response.send_message("❌ Нет прав.", ephemeral=True)
-        return
+    if not has_permission(interaction): return
     minutes = parse_time(time)
     if minutes <= 0 or minutes > 40320:
         await interaction.response.send_message("❌ Неверное время.", ephemeral=True)
         return
     await user.edit(mute=True, reason=reason)
-    embed = discord.Embed(title="🎤 Голосовой мьют выдан", color=0x9933FF)
-    embed.add_field(name="Пользователь", value=user.mention)
-    embed.add_field(name="Длительность", value=format_time(minutes))
-    embed.add_field(name="Причина", value=reason)
+    
+    guild_id = str(interaction.guild.id)
+    user_id = str(user.id)
+    until = (datetime.now() + timedelta(minutes=minutes)).isoformat()
+    db_execute("INSERT INTO voice_mutes (guild_id, user_id, until, reason, moderator, date) VALUES (?, ?, ?, ?, ?, ?)",
+              (guild_id, user_id, until, reason, interaction.user.name, datetime.now().strftime("%d.%m.%Y %H:%M:%S")))
+    
+    await interaction.response.send_message(f"🎤 {user.mention} мьют войса на {format_time(minutes)}")
+
+@bot.tree.command(name="vunmute", description="Снять мьют войса")
+async def vunmute(interaction: discord.Interaction, user: discord.Member):
+    if not has_permission(interaction): return
+    await user.edit(mute=False)
+    db_execute("DELETE FROM voice_mutes WHERE guild_id = ? AND user_id = ?", (str(interaction.guild.id), str(user.id)))
+    await interaction.response.send_message(f"🎤 Мьют снят с {user.mention}")
+
+# =============================================
+# НАСТРОЙКИ (команды Discord)
+# =============================================
+@bot.tree.command(name="settings", description="Настройки сервера")
+async def settings(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Нужны права администратора!", ephemeral=True)
+        return
+    
+    guild_id = str(interaction.guild.id)
+    embed = discord.Embed(title="⚙️ Настройки сервера", color=0x5865F2)
+    embed.add_field(name="Авто-роль", value=f"<@&{get_setting(guild_id, 'auto_role_id')}>" if get_setting(guild_id, 'auto_role_id') else "Не настроена")
+    embed.add_field(name="Приветствия", value=f"<#{get_setting(guild_id, 'welcome_channel_id')}>" if get_setting(guild_id, 'welcome_channel_id') else "Не настроены")
+    embed.add_field(name="Прощания", value=f"<#{get_setting(guild_id, 'leave_channel_id')}>" if get_setting(guild_id, 'leave_channel_id') else "Не настроены")
+    embed.add_field(name="Логи", value=f"<#{get_setting(guild_id, 'log_channel_id')}>" if get_setting(guild_id, 'log_channel_id') else "Не настроены")
+    embed.add_field(name="Уровни", value="Включены" if get_setting(guild_id, 'leveling_enabled') else "Выключены")
+    embed.set_footer(text="Настройте через сайт или командами ниже")
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="vunmute", description="Снять голосовой мьют")
-@app_commands.describe(user="С кого")
-async def vunmute(interaction: discord.Interaction, user: discord.Member):
-    if not has_permission(interaction):
-        await interaction.response.send_message("❌ Нет прав.", ephemeral=True)
-        return
-    await user.edit(mute=False)
-    await interaction.response.send_message(f"🎤 Голосовой мьют снят с {user.mention}")
+# =============================================
+# КОМАНДА УРОВНЕЙ
+# =============================================
+@bot.tree.command(name="rank", description="Посмотреть свой уровень")
+async def rank(interaction: discord.Interaction, user: discord.Member = None):
+    if not user: user = interaction.user
+    guild_id = str(interaction.guild.id)
+    user_id = str(user.id)
+    
+    result = db_execute_one("SELECT xp, level FROM user_levels WHERE guild_id = ? AND user_id = ?", (guild_id, user_id))
+    if result:
+        xp, level = result
+        xp_needed = level * 100
+        await interaction.response.send_message(f"🎖️ **{user.display_name}**\nУровень: **{level}**\nОпыт: **{xp}/{xp_needed}**")
+    else:
+        await interaction.response.send_message(f"{user.display_name} ещё не имеет уровней.")
+
+@bot.tree.command(name="top", description="Топ по уровням")
+async def top(interaction: discord.Interaction):
+    guild_id = str(interaction.guild.id)
+    top_users = db_execute("SELECT user_id, level, xp FROM user_levels WHERE guild_id = ? ORDER BY level DESC, xp DESC LIMIT 10", (guild_id,), fetch=True)
+    
+    if top_users:
+        embed = discord.Embed(title="🏆 Топ участников", color=0xFFD700)
+        for i, (user_id, level, xp) in enumerate(top_users, 1):
+            user = interaction.guild.get_member(int(user_id))
+            name = user.display_name if user else f"ID: {user_id}"
+            embed.add_field(name=f"#{i} {name}", value=f"Уровень: {level} | Опыт: {xp}", inline=False)
+        await interaction.response.send_message(embed=embed)
+    else:
+        await interaction.response.send_message("Нет данных об уровнях.")
 
 bot.run(BOT_TOKEN)
