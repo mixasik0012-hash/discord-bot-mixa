@@ -10,7 +10,7 @@ import random
 # =============================================
 # НАСТРОЙКИ
 # =============================================
-ALLOWED_ROLES = ["Модератор", "Админ", "Главный"]
+ALLOWED_ROLES = ["⚔️Админ состав⚔️"]
 BOT_TOKEN = os.getenv("BOT_TOKEN", "ТОКЕН_СЮДА_ЗАМЕНИТЕ")
 
 DB_FILE = "/data/bot_data.db" if os.path.exists("/data") else "bot_data.db"
