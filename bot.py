@@ -7,12 +7,8 @@ import asyncio
 import re
 import random
 
-# =============================================
-# НАСТРОЙКИ
-# =============================================
 ALLOWED_ROLES = ["⚔️Админ состав⚔️"]
 BOT_TOKEN = os.getenv("BOT_TOKEN", "ТОКЕН_СЮДА_ЗАМЕНИТЕ")
-
 DB_FILE = "/data/bot_data.db" if os.path.exists("/data") else "bot_data.db"
 
 intents = discord.Intents.default()
@@ -20,92 +16,60 @@ intents.message_content = True
 intents.members = True
 intents.voice_states = True
 
-# =============================================
-# БАЗА ДАННЫХ
-# =============================================
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    
     c.execute('''CREATE TABLE IF NOT EXISTS server_settings (
-        guild_id TEXT PRIMARY KEY,
-        auto_role_id TEXT,
-        welcome_channel_id TEXT,
-        welcome_text TEXT DEFAULT '👋 Добро пожаловать, {user}!',
-        leave_channel_id TEXT,
-        leave_text TEXT DEFAULT '😢 {user} покинул нас...',
-        log_channel_id TEXT,
-        leveling_enabled INTEGER DEFAULT 0,
-        welcome_enabled INTEGER DEFAULT 1,
-        leave_enabled INTEGER DEFAULT 1,
-        logging_enabled INTEGER DEFAULT 1,
-        automod_enabled INTEGER DEFAULT 0,
-        temp_channels_enabled INTEGER DEFAULT 0,
-        temp_channel_category_id TEXT,
-        temp_channel_name TEXT DEFAULT '🔊 Временный',
-        automod_anti_spam INTEGER DEFAULT 0,
-        automod_anti_caps INTEGER DEFAULT 0,
-        automod_anti_links INTEGER DEFAULT 0,
-        automod_bad_words TEXT DEFAULT ''
-    )''')
-    
+guild_id TEXT PRIMARY KEY,
+auto_role_id TEXT,
+welcome_channel_id TEXT,
+welcome_text TEXT DEFAULT '👋 Добро пожаловать, {user}!',
+leave_channel_id TEXT,
+leave_text TEXT DEFAULT '😢 {user} покинул нас...',
+log_channel_id TEXT,
+leveling_enabled INTEGER DEFAULT 0,
+welcome_enabled INTEGER DEFAULT 1,
+leave_enabled INTEGER DEFAULT 1,
+logging_enabled INTEGER DEFAULT 1,
+automod_enabled INTEGER DEFAULT 0,
+temp_channels_enabled INTEGER DEFAULT 0,
+temp_channel_category_id TEXT,
+temp_channel_name TEXT DEFAULT '🔊 Временный',
+automod_anti_spam INTEGER DEFAULT 0,
+automod_anti_caps INTEGER DEFAULT 0,
+automod_caps_percent INTEGER DEFAULT 70,
+automod_anti_links INTEGER DEFAULT 0,
+automod_bad_words TEXT DEFAULT '',
+moderator_role_id TEXT DEFAULT '',
+temp_creator_channel_name TEXT DEFAULT '⚙️Создать канал [+]⚙️'
+)''')
     c.execute('''CREATE TABLE IF NOT EXISTS warnings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        guild_id TEXT,
-        user_id TEXT,
-        reason TEXT,
-        moderator TEXT,
-        date TEXT
-    )''')
-    
+id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT, user_id TEXT,
+reason TEXT, moderator TEXT, date TEXT
+)''')
     c.execute('''CREATE TABLE IF NOT EXISTS mutes (
-        guild_id TEXT,
-        user_id TEXT,
-        until TEXT,
-        reason TEXT,
-        moderator TEXT,
-        date TEXT
-    )''')
-    
+guild_id TEXT, user_id TEXT, until TEXT, reason TEXT, moderator TEXT, date TEXT
+)''')
     c.execute('''CREATE TABLE IF NOT EXISTS voice_mutes (
-        guild_id TEXT,
-        user_id TEXT,
-        until TEXT,
-        reason TEXT,
-        moderator TEXT,
-        date TEXT
-    )''')
-    
+guild_id TEXT, user_id TEXT, until TEXT, reason TEXT, moderator TEXT, date TEXT
+)''')
     c.execute('''CREATE TABLE IF NOT EXISTS user_levels (
-        guild_id TEXT,
-        user_id TEXT,
-        xp INTEGER DEFAULT 0,
-        level INTEGER DEFAULT 1,
-        PRIMARY KEY (guild_id, user_id)
-    )''')
-    
+guild_id TEXT, user_id TEXT, xp INTEGER DEFAULT 0, level INTEGER DEFAULT 1,
+PRIMARY KEY (guild_id, user_id)
+)''')
     c.execute('''CREATE TABLE IF NOT EXISTS temp_channels (
-        guild_id TEXT,
-        channel_id TEXT PRIMARY KEY,
-        owner_id TEXT
-    )''')
-    
+guild_id TEXT, channel_id TEXT PRIMARY KEY, owner_id TEXT
+)''')
     conn.commit()
     conn.close()
 
 init_db()
 
-# =============================================
-# ФУНКЦИИ БД
-# =============================================
 def db_execute(query, params=(), fetch=False):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute(query, params)
-    if fetch:
-        result = c.fetchall()
-    else:
-        result = None
+    result = c.fetchall() if fetch else None
     conn.commit()
     conn.close()
     return result
@@ -148,12 +112,22 @@ def format_time(minutes: int) -> str:
     return " ".join(parts) if parts else "0mi"
 
 def has_permission(interaction: discord.Interaction) -> bool:
+    guild_id = str(interaction.guild.id)
+    mod_role_id = get_setting(guild_id, "moderator_role_id")
+    if mod_role_id:
+        user_roles = [str(role.id) for role in interaction.user.roles]
+        return mod_role_id in user_roles
     user_roles = [role.name for role in interaction.user.roles]
     return any(role in ALLOWED_ROLES for role in user_roles)
 
-# =============================================
-# БОТ
-# =============================================
+def has_permission_simple(member, guild_id):
+    mod_role_id = get_setting(guild_id, "moderator_role_id")
+    if mod_role_id:
+        user_roles = [str(role.id) for role in member.roles]
+        return mod_role_id in user_roles
+    user_roles = [role.name for role in member.roles]
+    return any(role in ALLOWED_ROLES for role in user_roles)
+
 class MyBot(discord.Client):
     def __init__(self):
         super().__init__(intents=intents)
@@ -204,239 +178,168 @@ async def on_ready():
     bot.loop.create_task(check_mutes())
     bot.loop.create_task(check_voice_mutes())
 
-# =============================================
-# ПРИВЕТСТВИЯ / ПРОЩАНИЯ / ЛОГИ / АВТО-РОЛЬ
-# =============================================
 @bot.event
 async def on_member_join(member):
     guild_id = str(member.guild.id)
-    
-    # Авто-роль
     auto_role_id = get_setting(guild_id, "auto_role_id")
     if auto_role_id:
         role = member.guild.get_role(int(auto_role_id))
         if role:
             try: await member.add_roles(role)
             except: pass
-    
-    # Приветствие
     if get_setting(guild_id, "welcome_enabled"):
-        welcome_channel_id = get_setting(guild_id, "welcome_channel_id")
-        welcome_text = get_setting(guild_id, "welcome_text") or "👋 Добро пожаловать, {user}!"
-        if welcome_channel_id:
-            channel = member.guild.get_channel(int(welcome_channel_id))
+        ch_id = get_setting(guild_id, "welcome_channel_id")
+        text = get_setting(guild_id, "welcome_text") or "👋 Добро пожаловать, {user}!"
+        if ch_id:
+            channel = member.guild.get_channel(int(ch_id))
             if channel:
-                text = welcome_text.replace("{user}", member.mention).replace("{server}", member.guild.name)
-                embed = discord.Embed(title="👋 Новый участник!", description=text, color=0x57F287)
+                msg = text.replace("{user}", member.mention).replace("{server}", member.guild.name)
+                embed = discord.Embed(title="👋 Новый участник!", description=msg, color=0x57F287)
                 embed.add_field(name="Всего участников", value=str(member.guild.member_count))
                 embed.set_thumbnail(url=member.display_avatar.url)
                 await channel.send(embed=embed)
-    
-    # Лог
     if get_setting(guild_id, "logging_enabled"):
-        log_channel_id = get_setting(guild_id, "log_channel_id")
-        if log_channel_id:
-            log_channel = member.guild.get_channel(int(log_channel_id))
-            if log_channel:
-                embed = discord.Embed(title="📥 Участник присоединился", color=0x57F287)
-                embed.add_field(name="Пользователь", value=f"{member.mention} ({member.name})")
-                embed.set_footer(text=f"ID: {member.id}")
-                await log_channel.send(embed=embed)
+        log_id = get_setting(guild_id, "log_channel_id")
+        if log_id:
+            log_ch = member.guild.get_channel(int(log_id))
+            if log_ch:
+                await log_ch.send(embed=discord.Embed(title="📥 Присоединился", color=0x57F287)
+                                 .add_field(name="Пользователь", value=f"{member.mention} ({member.name})")
+                                 .set_footer(text=f"ID: {member.id}"))
 
 @bot.event
 async def on_member_remove(member):
     guild_id = str(member.guild.id)
-    
-    # Прощание
     if get_setting(guild_id, "leave_enabled"):
-        leave_channel_id = get_setting(guild_id, "leave_channel_id")
-        leave_text = get_setting(guild_id, "leave_text") or "😢 {user} покинул нас..."
-        if leave_channel_id:
-            channel = member.guild.get_channel(int(leave_channel_id))
+        ch_id = get_setting(guild_id, "leave_channel_id")
+        text = get_setting(guild_id, "leave_text") or "😢 {user} покинул нас..."
+        if ch_id:
+            channel = member.guild.get_channel(int(ch_id))
             if channel:
-                text = leave_text.replace("{user}", member.mention).replace("{server}", member.guild.name)
-                await channel.send(embed=discord.Embed(title="😢 Участник ушёл", description=text, color=0xED4245))
-    
-    # Лог
+                msg = text.replace("{user}", member.mention).replace("{server}", member.guild.name)
+                await channel.send(embed=discord.Embed(title="😢 Ушёл", description=msg, color=0xED4245))
     if get_setting(guild_id, "logging_enabled"):
-        log_channel_id = get_setting(guild_id, "log_channel_id")
-        if log_channel_id:
-            log_channel = member.guild.get_channel(int(log_channel_id))
-            if log_channel:
-                embed = discord.Embed(title="📤 Участник вышел", color=0xED4245)
-                embed.add_field(name="Пользователь", value=f"{member.mention} ({member.name})")
-                embed.set_footer(text=f"ID: {member.id}")
-                await log_channel.send(embed=embed)
+        log_id = get_setting(guild_id, "log_channel_id")
+        if log_id:
+            log_ch = member.guild.get_channel(int(log_id))
+            if log_ch:
+                await log_ch.send(embed=discord.Embed(title="📤 Вышел", color=0xED4245)
+                                 .add_field(name="Пользователь", value=f"{member.mention} ({member.name})")
+                                 .set_footer(text=f"ID: {member.id}"))
 
-# =============================================
-# АВТО-МОДЕРАЦИЯ
-# =============================================
 @bot.event
 async def on_message(message):
     if message.author.bot: return
-    
     guild_id = str(message.guild.id)
-    automod_enabled = get_setting(guild_id, "automod_enabled")
-    
-    if automod_enabled:
-        # Анти-спам (больше 5 сообщений за 5 секунд)
-        # Упрощённая версия — проверка капса и ссылок
-        
-        # Анти-капс (больше 70% заглавных)
+    if get_setting(guild_id, "automod_enabled"):
         if get_setting(guild_id, "automod_anti_caps"):
             if len(message.content) > 10:
+                caps_percent = get_setting(guild_id, "automod_caps_percent") or 70
                 caps_count = sum(1 for c in message.content if c.isupper())
-                if caps_count / len(message.content) > 0.7:
+                if caps_count / len(message.content) > caps_percent / 100:
                     await message.delete()
-                    await message.channel.send(f"{message.author.mention} Не злоупотребляй капсом!", delete_after=5)
+                    await message.channel.send(f"{message.author.mention} Слишком много заглавных!", delete_after=5)
                     return
-        
-        # Анти-ссылки
         if get_setting(guild_id, "automod_anti_links"):
-            if "http://" in message.content or "https://" in message.content or "discord.gg/" in message.content:
+            if any(x in message.content for x in ["http://", "https://", "discord.gg/"]):
                 if not has_permission_simple(message.author, guild_id):
                     await message.delete()
                     await message.channel.send(f"{message.author.mention} Ссылки запрещены!", delete_after=5)
                     return
-        
-        # Плохие слова
         bad_words = get_setting(guild_id, "automod_bad_words")
         if bad_words:
-            words_list = bad_words.lower().split(",")
-            for word in words_list:
+            for word in bad_words.lower().split(","):
                 if word.strip() in message.content.lower():
                     await message.delete()
                     await message.channel.send(f"{message.author.mention} Это слово запрещено!", delete_after=5)
                     return
-    
-    # Уровни
     if get_setting(guild_id, "leveling_enabled"):
         user_id = str(message.author.id)
         xp = random.randint(5, 15)
         result = db_execute_one("SELECT xp, level FROM user_levels WHERE guild_id = ? AND user_id = ?", (guild_id, user_id))
-        
         if result:
             current_xp, current_level = result
             new_xp = current_xp + xp
-            xp_needed = current_level * 100
-            if new_xp >= xp_needed:
+            if new_xp >= current_level * 100:
                 new_level = current_level + 1
                 db_execute("UPDATE user_levels SET xp = ?, level = ? WHERE guild_id = ? AND user_id = ?", 
-                          (new_xp - xp_needed, new_level, guild_id, user_id))
+                          (new_xp - current_level * 100, new_level, guild_id, user_id))
                 await message.channel.send(f"🎉 {message.author.mention} достиг уровня **{new_level}**!")
             else:
                 db_execute("UPDATE user_levels SET xp = ? WHERE guild_id = ? AND user_id = ?", (new_xp, guild_id, user_id))
         else:
             db_execute("INSERT INTO user_levels (guild_id, user_id, xp, level) VALUES (?, ?, ?, ?)", (guild_id, user_id, xp, 1))
 
-def has_permission_simple(member, guild_id):
-    user_roles = [role.name for role in member.roles]
-    return any(role in ALLOWED_ROLES for role in user_roles)
-
-# =============================================
-# ВРЕМЕННЫЕ ГОЛОСОВЫЕ КАНАЛЫ
-# =============================================
 @bot.event
 async def on_voice_state_update(member, before, after):
     guild_id = str(member.guild.id)
-    
-    if not get_setting(guild_id, "temp_channels_enabled"):
-        return
-    
-    # Если зашёл в специальный канал — создать временный
+    if not get_setting(guild_id, "temp_channels_enabled"): return
     if after.channel:
-        category_id = get_setting(guild_id, "temp_channel_category_id")
-        temp_name = get_setting(guild_id, "temp_channel_name") or "🔊 Временный"
-        
-        # Создаём канал если зашли в "создатель"
-        if after.channel.name.lower() == "➕ создать канал":
+        creator_name = get_setting(guild_id, "temp_creator_channel_name") or "⚙️Создать канал [+]⚙️"
+        if after.channel.name.lower() == creator_name.lower():
+            category_id = get_setting(guild_id, "temp_channel_category_id")
+            temp_name = get_setting(guild_id, "temp_channel_name") or "🔊 Временный"
             category = member.guild.get_channel(int(category_id)) if category_id else None
-            if category:
-                channel = await member.guild.create_voice_channel(
-                    name=f"{temp_name} {member.display_name}",
-                    category=category
-                )
-                await member.move_to(channel)
-                db_execute("INSERT INTO temp_channels (guild_id, channel_id, owner_id) VALUES (?, ?, ?)",
-                          (guild_id, str(channel.id), str(member.id)))
-    
-    # Удалить пустой временный канал
+            channel = await member.guild.create_voice_channel(
+                name=f"{temp_name} {member.display_name}", category=category)
+            await member.move_to(channel)
+            db_execute("INSERT INTO temp_channels VALUES (?, ?, ?)", (guild_id, str(channel.id), str(member.id)))
     if before.channel:
-        channel_id = str(before.channel.id)
-        temp_channel = db_execute_one("SELECT owner_id FROM temp_channels WHERE channel_id = ?", (channel_id,))
-        if temp_channel and len(before.channel.members) == 0:
+        ch_id = str(before.channel.id)
+        temp = db_execute_one("SELECT owner_id FROM temp_channels WHERE channel_id = ?", (ch_id,))
+        if temp and len(before.channel.members) == 0:
             try:
                 await before.channel.delete()
-                db_execute("DELETE FROM temp_channels WHERE channel_id = ?", (channel_id,))
+                db_execute("DELETE FROM temp_channels WHERE channel_id = ?", (ch_id,))
             except: pass
 
-# =============================================
-# ВАРНЫ
-# =============================================
+# Варны
 @bot.tree.command(name="warn", description="Выдать предупреждение")
 @app_commands.describe(user="Кому", reason="Причина")
 async def warn(interaction: discord.Interaction, user: discord.Member, reason: str = "Не указана"):
     if not has_permission(interaction):
         await interaction.response.send_message("❌ Нет прав.", ephemeral=True)
         return
-    
-    guild_id = str(interaction.guild.id)
-    user_id = str(user.id)
-    date = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-    
-    db_execute("INSERT INTO warnings (guild_id, user_id, reason, moderator, date) VALUES (?, ?, ?, ?, ?)",
-              (guild_id, user_id, reason, interaction.user.name, date))
-    
+    guild_id, user_id = str(interaction.guild.id), str(user.id)
+    db_execute("INSERT INTO warnings VALUES (NULL, ?, ?, ?, ?, ?)",
+              (guild_id, user_id, reason, interaction.user.name, datetime.now().strftime("%d.%m.%Y %H:%M:%S")))
     count = db_execute_one("SELECT COUNT(*) FROM warnings WHERE guild_id = ? AND user_id = ?", (guild_id, user_id))[0]
-    
-    embed = discord.Embed(title="⚠️ Предупреждение выдано", color=0xFFA500)
-    embed.add_field(name="Пользователь", value=user.mention)
+    embed = discord.Embed(title="⚠️ Предупреждение", color=0xFFA500)
+    embed.add_field(name="Кому", value=user.mention)
     embed.add_field(name="Причина", value=reason)
-    embed.add_field(name="Всего варнов", value=str(count))
+    embed.add_field(name="Всего", value=str(count))
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="warn_remove", description="Снять варн")
 async def warn_remove(interaction: discord.Interaction, user: discord.Member):
     if not has_permission(interaction): return
-    guild_id = str(interaction.guild.id)
-    user_id = str(user.id)
+    gid, uid = str(interaction.guild.id), str(user.id)
     db_execute("DELETE FROM warnings WHERE guild_id = ? AND user_id = ? AND id = (SELECT id FROM warnings WHERE guild_id = ? AND user_id = ? ORDER BY id DESC LIMIT 1)",
-              (guild_id, user_id, guild_id, user_id))
-    await interaction.response.send_message(f"✅ Последний варн снят с {user.mention}")
+              (gid, uid, gid, uid))
+    await interaction.response.send_message(f"✅ Варн снят с {user.mention}")
 
 @bot.tree.command(name="warnings", description="Список варнов")
 async def warnings_list(interaction: discord.Interaction, user: discord.Member = None):
     if not user: user = interaction.user
-    guild_id = str(interaction.guild.id)
-    warns = db_execute("SELECT reason, moderator, date FROM warnings WHERE guild_id = ? AND user_id = ? ORDER BY id DESC", 
-                       (guild_id, str(user.id)), fetch=True)
+    warns = db_execute("SELECT reason, moderator, date FROM warnings WHERE guild_id = ? AND user_id = ?",
+                       (str(interaction.guild.id), str(user.id)), fetch=True)
     if warns:
         embed = discord.Embed(title=f"⚠️ Варны: {user.display_name}", color=0xFFA500)
-        for i, (reason, moderator, date) in enumerate(warns, 1):
-            embed.add_field(name=f"#{i} | {date}", value=f"Причина: {reason}\nМодератор: {moderator}", inline=False)
+        for i, (r, m, d) in enumerate(warns, 1):
+            embed.add_field(name=f"#{i} | {d}", value=f"{r}\nМодер: {m}", inline=False)
         await interaction.response.send_message(embed=embed)
     else:
-        await interaction.response.send_message(f"✅ У {user.mention} нет варнов.", ephemeral=True)
+        await interaction.response.send_message(f"✅ Нет варнов.", ephemeral=True)
 
-# =============================================
-# ТАЙМАУТ
-# =============================================
+# Таймаут
 @bot.tree.command(name="timeout", description="Таймаут")
 async def timeout(interaction: discord.Interaction, user: discord.Member, time: str, reason: str = "Не указана"):
-    if not has_permission(interaction):
-        await interaction.response.send_message("❌ Нет прав.", ephemeral=True)
-        return
+    if not has_permission(interaction): return
     minutes = parse_time(time)
     if minutes <= 0 or minutes > 40320:
         await interaction.response.send_message("❌ Неверное время.", ephemeral=True)
         return
     await user.timeout(timedelta(minutes=minutes), reason=reason)
-    
-    guild_id = str(interaction.guild.id)
-    until = (datetime.now() + timedelta(minutes=minutes)).isoformat()
-    db_execute("INSERT INTO mutes (guild_id, user_id, until, reason, moderator, date) VALUES (?, ?, ?, ?, ?, ?)",
-              (guild_id, str(user.id), until, reason, interaction.user.name, datetime.now().strftime("%d.%m.%Y %H:%M:%S")))
-    
     await interaction.response.send_message(f"🔇 {user.mention} таймаут на {format_time(minutes)}")
 
 @bot.tree.command(name="untimeout", description="Снять таймаут")
@@ -445,24 +348,14 @@ async def untimeout(interaction: discord.Interaction, user: discord.Member):
     await user.timeout(None)
     await interaction.response.send_message(f"🔊 Таймаут снят с {user.mention}")
 
-# =============================================
-# ГОЛОСОВОЙ МЬЮТ
-# =============================================
+# Войс мьют
 @bot.tree.command(name="vmute", description="Голосовой мьют")
 async def vmute(interaction: discord.Interaction, user: discord.Member, time: str, reason: str = "Не указана"):
     if not has_permission(interaction): return
     minutes = parse_time(time)
-    if minutes <= 0 or minutes > 40320:
-        await interaction.response.send_message("❌ Неверное время.", ephemeral=True)
-        return
+    if minutes <= 0 or minutes > 40320: return
     await user.edit(mute=True, reason=reason)
-    
-    guild_id = str(interaction.guild.id)
-    until = (datetime.now() + timedelta(minutes=minutes)).isoformat()
-    db_execute("INSERT INTO voice_mutes (guild_id, user_id, until, reason, moderator, date) VALUES (?, ?, ?, ?, ?, ?)",
-              (guild_id, str(user.id), until, reason, interaction.user.name, datetime.now().strftime("%d.%m.%Y %H:%M:%S")))
-    
-    await interaction.response.send_message(f"🎤 {user.mention} мьют войса на {format_time(minutes)}")
+    await interaction.response.send_message(f"🎤 {user.mention} мьют на {format_time(minutes)}")
 
 @bot.tree.command(name="vunmute", description="Снять мьют войса")
 async def vunmute(interaction: discord.Interaction, user: discord.Member):
@@ -470,67 +363,52 @@ async def vunmute(interaction: discord.Interaction, user: discord.Member):
     await user.edit(mute=False)
     await interaction.response.send_message(f"🎤 Мьют снят с {user.mention}")
 
-# =============================================
-# УРОВНИ (ДОПОЛНИТЕЛЬНЫЕ КОМАНДЫ)
-# =============================================
+# Уровни
 @bot.tree.command(name="rank", description="Уровень")
 async def rank(interaction: discord.Interaction, user: discord.Member = None):
     if not user: user = interaction.user
-    guild_id = str(interaction.guild.id)
-    result = db_execute_one("SELECT xp, level FROM user_levels WHERE guild_id = ? AND user_id = ?", (guild_id, str(user.id)))
-    if result:
-        xp, level = result
-        await interaction.response.send_message(f"🎖️ **{user.display_name}**\nУровень: **{level}**\nОпыт: **{xp}/{level * 100}**")
+    r = db_execute_one("SELECT xp, level FROM user_levels WHERE guild_id = ? AND user_id = ?", 
+                       (str(interaction.guild.id), str(user.id)))
+    if r:
+        xp, lv = r
+        await interaction.response.send_message(f"🎖️ {user.display_name}\nУровень: **{lv}**\nОпыт: **{xp}/{lv*100}**")
     else:
-        await interaction.response.send_message(f"{user.display_name} ещё не имеет уровней.")
+        await interaction.response.send_message("Нет уровней.")
 
-@bot.tree.command(name="top", description="Топ по уровням")
+@bot.tree.command(name="top", description="Топ")
 async def top(interaction: discord.Interaction):
-    guild_id = str(interaction.guild.id)
-    top_users = db_execute("SELECT user_id, level, xp FROM user_levels WHERE guild_id = ? ORDER BY level DESC, xp DESC LIMIT 10", (guild_id,), fetch=True)
-    if top_users:
-        embed = discord.Embed(title="🏆 Топ участников", color=0xFFD700)
-        for i, (user_id, level, xp) in enumerate(top_users, 1):
-            user = interaction.guild.get_member(int(user_id))
-            name = user.display_name if user else f"ID: {user_id}"
-            embed.add_field(name=f"#{i} {name}", value=f"Уровень: {level} | Опыт: {xp}", inline=False)
+    data = db_execute("SELECT user_id, level, xp FROM user_levels WHERE guild_id = ? ORDER BY level DESC, xp DESC LIMIT 10",
+                     (str(interaction.guild.id),), fetch=True)
+    if data:
+        embed = discord.Embed(title="🏆 Топ", color=0xFFD700)
+        for i, (uid, lv, xp) in enumerate(data, 1):
+            u = interaction.guild.get_member(int(uid))
+            embed.add_field(name=f"#{i} {u.display_name if u else uid}", value=f"Ур: {lv} | XP: {xp}", inline=False)
         await interaction.response.send_message(embed=embed)
     else:
         await interaction.response.send_message("Нет данных.")
 
 @bot.tree.command(name="add_xp", description="Добавить опыт")
-@app_commands.describe(user="Кому", amount="Сколько опыта")
 async def add_xp(interaction: discord.Interaction, user: discord.Member, amount: int):
-    if not has_permission(interaction):
-        await interaction.response.send_message("❌ Нет прав.", ephemeral=True)
-        return
-    guild_id = str(interaction.guild.id)
-    user_id = str(user.id)
-    result = db_execute_one("SELECT xp FROM user_levels WHERE guild_id = ? AND user_id = ?", (guild_id, user_id))
-    if result:
-        db_execute("UPDATE user_levels SET xp = xp + ? WHERE guild_id = ? AND user_id = ?", (amount, guild_id, user_id))
-    else:
-        db_execute("INSERT INTO user_levels (guild_id, user_id, xp, level) VALUES (?, ?, ?, 1)", (guild_id, user_id, amount))
-    await interaction.response.send_message(f"✅ Добавлено {amount} XP для {user.mention}")
+    if not has_permission(interaction): return
+    gid, uid = str(interaction.guild.id), str(user.id)
+    r = db_execute_one("SELECT xp FROM user_levels WHERE guild_id = ? AND user_id = ?", (gid, uid))
+    if r: db_execute("UPDATE user_levels SET xp = xp + ? WHERE guild_id = ? AND user_id = ?", (amount, gid, uid))
+    else: db_execute("INSERT INTO user_levels VALUES (?, ?, ?, 1)", (gid, uid, amount))
+    await interaction.response.send_message(f"✅ +{amount} XP → {user.mention}")
 
 @bot.tree.command(name="remove_xp", description="Убрать опыт")
 async def remove_xp(interaction: discord.Interaction, user: discord.Member, amount: int):
-    if not has_permission(interaction):
-        await interaction.response.send_message("❌ Нет прав.", ephemeral=True)
-        return
-    guild_id = str(interaction.guild.id)
-    user_id = str(user.id)
-    db_execute("UPDATE user_levels SET xp = MAX(0, xp - ?) WHERE guild_id = ? AND user_id = ?", (amount, guild_id, user_id))
-    await interaction.response.send_message(f"✅ Убрано {amount} XP у {user.mention}")
+    if not has_permission(interaction): return
+    gid, uid = str(interaction.guild.id), str(user.id)
+    db_execute("UPDATE user_levels SET xp = MAX(0, xp - ?) WHERE guild_id = ? AND user_id = ?", (amount, gid, uid))
+    await interaction.response.send_message(f"✅ -{amount} XP у {user.mention}")
 
 @bot.tree.command(name="set_level", description="Установить уровень")
 async def set_level(interaction: discord.Interaction, user: discord.Member, level: int):
-    if not has_permission(interaction):
-        await interaction.response.send_message("❌ Нет прав.", ephemeral=True)
-        return
-    guild_id = str(interaction.guild.id)
-    user_id = str(user.id)
-    db_execute("INSERT OR REPLACE INTO user_levels (guild_id, user_id, xp, level) VALUES (?, ?, 0, ?)", (guild_id, user_id, level))
-    await interaction.response.send_message(f"✅ Уровень {user.mention} установлен на **{level}**")
+    if not has_permission(interaction): return
+    gid, uid = str(interaction.guild.id), str(user.id)
+    db_execute("INSERT OR REPLACE INTO user_levels VALUES (?, ?, 0, ?)", (gid, uid, level))
+    await interaction.response.send_message(f"✅ {user.mention} → уровень **{level}**")
 
 bot.run(BOT_TOKEN)
