@@ -284,17 +284,33 @@ async def on_message(message):
 @bot.event
 async def on_voice_state_update(member, before, after):
     guild_id = str(member.guild.id)
-    if not get_setting(guild_id, "temp_channels_enabled"): return
+    
+    if not get_setting(guild_id, "temp_channels_enabled"):
+        return
+    
     if after.channel:
-        creator_name = get_setting(guild_id, "temp_creator_channel_name") or "⚙️Создать канал [+]⚙️"
-        if "создать" in after.channel.name.lower() or after.channel.name.lower() == creator_name.lower():
-            category_id = get_setting(guild_id, "temp_channel_category_id")
-            temp_name = get_setting(guild_id, "temp_channel_name") or "🔊 Временный"
-            category = member.guild.get_channel(int(category_id)) if category_id else None
-            channel = await member.guild.create_voice_channel(
-                name=f"{temp_name} {member.display_name}", category=category)
-            await member.move_to(channel)
-            db_execute("INSERT INTO temp_channels VALUES (?, ?, ?)", (guild_id, str(channel.id), str(member.id)))
+        creator_name = get_setting(guild_id, "temp_creator_channel_name") or "test"
+        
+        if after.channel.name.lower() == creator_name.lower():
+            try:
+                category_id = get_setting(guild_id, "temp_channel_category_id")
+                temp_name = get_setting(guild_id, "temp_channel_name") or "канал для"
+                
+                category = None
+                if category_id:
+                    category = member.guild.get_channel(int(category_id))
+                
+                channel_name = temp_name.replace("{member.displayName}", member.display_name)
+                channel = await member.guild.create_voice_channel(
+                    name=channel_name,
+                    category=category
+                )
+                await member.move_to(channel)
+                db_execute("INSERT OR REPLACE INTO temp_channels VALUES (?, ?, ?)", 
+                          (guild_id, str(channel.id), str(member.id)))
+            except Exception as e:
+                print(f"Ошибка: {e}")
+    
     if before.channel:
         ch_id = str(before.channel.id)
         temp = db_execute_one("SELECT owner_id FROM temp_channels WHERE channel_id = ?", (ch_id,))
@@ -302,7 +318,8 @@ async def on_voice_state_update(member, before, after):
             try:
                 await before.channel.delete()
                 db_execute("DELETE FROM temp_channels WHERE channel_id = ?", (ch_id,))
-            except: pass
+            except:
+                pass
 
 # Варны
 @bot.tree.command(name="warn", description="Выдать предупреждение")
