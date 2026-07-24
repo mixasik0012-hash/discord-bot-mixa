@@ -6,6 +6,7 @@
   "deploy": {
     "startCommand": "cd site && python app.py",
     "healthcheckPath": "/",
+    "healthcheckTimeout": 30,
     "restartPolicyType": "ON_FAILURE"
   }
 }
