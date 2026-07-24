@@ -1,0 +1,191 @@
+from flask import Flask, render_template, request, redirect, url_for, session
+from flask_cors import CORS
+import requests
+import os
+import sqlite3
+
+app = Flask(__name__)
+app.secret_key = os.urandom(24).hex()
+CORS(app)
+
+CLIENT_ID = "1529545316003479843"
+CLIENT_SECRET = os.getenv("CLIENT_SECRET", "")
+REDIRECT_URI = os.getenv("REDIRECT_URI", "http://localhost:5000/callback")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+API_BASE = "https://discord.com/api/v10"
+DB_FILE = "bot_data.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS server_settings (
+guild_id TEXT PRIMARY KEY, auto_role_id TEXT, welcome_channel_id TEXT,
+welcome_text TEXT DEFAULT '👋 Добро пожаловать, {user}!', leave_channel_id TEXT,
+leave_text TEXT DEFAULT '😢 {user} покинул нас...', log_channel_id TEXT,
+leveling_enabled INTEGER DEFAULT 0, welcome_enabled INTEGER DEFAULT 0,
+leave_enabled INTEGER DEFAULT 0, logging_enabled INTEGER DEFAULT 0,
+automod_enabled INTEGER DEFAULT 0, temp_channels_enabled INTEGER DEFAULT 0,
+temp_channel_category_id TEXT, temp_channel_name TEXT DEFAULT '🔊 Временный',
+automod_anti_caps INTEGER DEFAULT 0, automod_caps_percent INTEGER DEFAULT 70,
+automod_anti_links INTEGER DEFAULT 0, automod_bad_words TEXT DEFAULT '',
+moderator_role_ids TEXT DEFAULT '', temp_creator_channel_name TEXT DEFAULT 'test')''')
+    c.execute('''CREATE TABLE IF NOT EXISTS warnings (
+id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT, user_id TEXT,
+reason TEXT, moderator TEXT, date TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS mutes (guild_id TEXT, user_id TEXT, until TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS voice_mutes (guild_id TEXT, user_id TEXT, until TEXT)''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+def db_execute(query, params=()):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute(query, params)
+    conn.commit()
+    conn.close()
+
+def db_execute_one(query, params=()):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute(query, params)
+    result = c.fetchone()
+    conn.commit()
+    conn.close()
+    return result
+
+def login_required(f):
+    from functools import wraps
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if 'user' not in session: return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated
+
+def get_user_guilds(token):
+    headers = {'Authorization': f'Bearer {token}'}
+    r = requests.get(f'{API_BASE}/users/@me/guilds', headers=headers, timeout=10)
+    return r.json() if r.ok else []
+
+def get_guild_roles(guild_id):
+    headers = {'Authorization': f'Bot {BOT_TOKEN}'}
+    r = requests.get(f'{API_BASE}/guilds/{guild_id}/roles', headers=headers, timeout=10)
+    return r.json() if r.ok else []
+
+def get_guild_channels(guild_id):
+    headers = {'Authorization': f'Bot {BOT_TOKEN}'}
+    r = requests.get(f'{API_BASE}/guilds/{guild_id}/channels', headers=headers, timeout=10)
+    return r.json() if r.ok else []
+
+def get_user_info(token):
+    headers = {'Authorization': f'Bearer {token}'}
+    r = requests.get(f'{API_BASE}/users/@me', headers=headers, timeout=10)
+    return r.json() if r.ok else None
+
+def exchange_code(code):
+    data = {'client_id': CLIENT_ID, 'client_secret': CLIENT_SECRET,
+            'grant_type': 'authorization_code', 'code': code, 'redirect_uri': REDIRECT_URI}
+    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+    r = requests.post(f'{API_BASE}/oauth2/token', data=data, headers=headers, timeout=10)
+    return r.json() if r.ok else None
+
+@app.route('/')
+def index():
+    return render_template('index.html', bot_name="Mixasik",
+                         invite_link=f"https://discord.com/oauth2/authorize?client_id={CLIENT_ID}&scope=bot%20applications.commands&permissions=8")
+
+@app.route('/login')
+def login():
+    return redirect(f"{API_BASE}/oauth2/authorize?client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}&response_type=code&scope=identify%20guilds")
+
+@app.route('/callback')
+def callback():
+    code = request.args.get('code')
+    if not code: return "Ошибка", 400
+    td = exchange_code(code)
+    if not td: return "Ошибка", 500
+    session['access_token'] = td['access_token']
+    ui = get_user_info(td['access_token'])
+    session['user'] = {'id': ui['id'], 'username': ui['username'],
+                       'avatar': f"https://cdn.discordapp.com/avatars/{ui['id']}/{ui['avatar']}.png" if ui.get('avatar') else ""}
+    return redirect(url_for('select_server'))
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('index'))
+
+@app.route('/servers')
+@login_required
+def select_server():
+    guilds = get_user_guilds(session['access_token'])
+    return render_template('servers.html', user=session['user'], guilds=guilds)
+
+@app.route('/dashboard/<guild_id>')
+@login_required
+def dashboard(guild_id):
+    roles = get_guild_roles(guild_id)
+    channels = get_guild_channels(guild_id)
+    text_channels = [c for c in channels if c.get('type') == 0]
+    categories = [c for c in channels if c.get('type') == 4]
+    
+    warns = db_execute_one("SELECT COUNT(*) FROM warnings WHERE guild_id = ?", (guild_id,))
+    warns_count = warns[0] if warns else 0
+    mutes = db_execute_one("SELECT COUNT(*) FROM mutes WHERE guild_id = ?", (guild_id,))
+    mutes_count = mutes[0] if mutes else 0
+    vmutes = db_execute_one("SELECT COUNT(*) FROM voice_mutes WHERE guild_id = ?", (guild_id,))
+    vmutes_count = vmutes[0] if vmutes else 0
+    
+    result = db_execute_one("SELECT * FROM server_settings WHERE guild_id = ?", (guild_id,))
+    settings = {}
+    if result:
+        cols = ['auto_role_id','welcome_channel_id','welcome_text','leave_channel_id','leave_text',
+                'log_channel_id','leveling_enabled','welcome_enabled','leave_enabled','logging_enabled',
+                'automod_enabled','temp_channels_enabled','temp_channel_category_id','temp_channel_name',
+                'automod_anti_caps','automod_caps_percent','automod_anti_links','automod_bad_words',
+                'moderator_role_ids','temp_creator_channel_name']
+        for i, col in enumerate(cols):
+            settings[col] = result[i+1] if len(result) > i+1 else ''
+    
+    return render_template('dashboard.html', user=session['user'], guild_id=guild_id,
+                         roles=roles, channels=text_channels, categories=categories,
+                         settings=settings, warns_count=warns_count,
+                         mutes_count=mutes_count, vmutes_count=vmutes_count)
+
+@app.route('/save_settings/<guild_id>', methods=['POST'])
+@login_required
+def save_settings(guild_id):
+    db_execute('''INSERT OR REPLACE INTO server_settings 
+        (guild_id, auto_role_id, welcome_channel_id, welcome_text, leave_channel_id, leave_text,
+         log_channel_id, leveling_enabled, welcome_enabled, leave_enabled, logging_enabled,
+         automod_enabled, temp_channels_enabled, temp_channel_category_id, temp_channel_name,
+         automod_anti_caps, automod_caps_percent, automod_anti_links, automod_bad_words,
+         moderator_role_ids, temp_creator_channel_name)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+        (guild_id,
+         request.form.get('auto_role_id', ''),
+         request.form.get('welcome_channel_id', ''),
+         request.form.get('welcome_text', '👋 Добро пожаловать, {user}!'),
+         request.form.get('leave_channel_id', ''),
+         request.form.get('leave_text', '😢 {user} покинул нас...'),
+         request.form.get('log_channel_id', ''),
+         request.form.get('leveling_enabled', '0'),
+         request.form.get('welcome_enabled', '0'),
+         request.form.get('leave_enabled', '0'),
+         request.form.get('logging_enabled', '0'),
+         request.form.get('automod_enabled', '0'),
+         request.form.get('temp_channels_enabled', '0'),
+         request.form.get('temp_channel_category_id', ''),
+         request.form.get('temp_channel_name', '🔊 Временный'),
+         request.form.get('automod_anti_caps', '0'),
+         request.form.get('automod_caps_percent', '70'),
+         request.form.get('automod_anti_links', '0'),
+         request.form.get('automod_bad_words', ''),
+         request.form.get('moderator_role_ids', ''),
+         request.form.get('temp_creator_channel_name', 'test')))
+    return redirect(url_for('dashboard', guild_id=guild_id))
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
