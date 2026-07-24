@@ -7,7 +7,7 @@ import asyncio
 import re
 import random
 
-ALLOWED_ROLES = [⚔️Админ состав⚔️"]
+ALLOWED_ROLES = ["⚔️Админ состав⚔️"]
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DB_FILE = "bot_data.db"
 
