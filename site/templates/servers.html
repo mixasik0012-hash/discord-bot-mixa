@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Сервера</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #0f0f1a; color: #fff; }
+        .container { max-width: 800px; margin: 2rem auto; }
+        .server-card { background: rgba(255,255,255,0.05); padding: 1rem; border-radius: 8px; margin: 0.5rem 0; display: block; color: white; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📋 Выберите сервер</h1>
+        {% for guild in guilds %}
+        <a href="/dashboard/{{ guild.id }}" class="server-card">{{ guild.name }}</a>
+        {% endfor %}
+    </div>
+</body>
+</html>
