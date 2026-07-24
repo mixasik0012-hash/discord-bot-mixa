@@ -7,7 +7,7 @@ import asyncio
 import re
 import random
 
-ALLOWED_ROLES = ["⚔️Админ состав⚔️"]
+ALLOWED_ROLES = ["Модератор", "Админ", "Главный"]
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DB_FILE = "bot_data.db"
 
@@ -127,17 +127,11 @@ async def on_ready():
 @bot.event
 async def on_voice_state_update(member, before, after):
     print(f"🎤 {member.name}: {before.channel} -> {after.channel}")
-    
     guild_id = str(member.guild.id)
-    
     if not get_setting(guild_id, "temp_channels_enabled"):
-        print("❌ Временные каналы выключены")
         return
-    
     if after.channel:
         creator = get_setting(guild_id, "temp_creator_channel_name") or "test"
-        print(f"🔍 Сравнение: '{after.channel.name}' == '{creator}'")
-        
         if after.channel.name.lower() == creator.lower():
             try:
                 cat_id = get_setting(guild_id, "temp_channel_category_id")
@@ -146,10 +140,8 @@ async def on_voice_state_update(member, before, after):
                 ch = await member.guild.create_voice_channel(f"{tname} {member.display_name}", category=cat)
                 await member.move_to(ch)
                 db_execute("INSERT INTO temp_channels VALUES (?, ?, ?)", (guild_id, str(ch.id), str(member.id)))
-                print(f"✅ Канал создан: {ch.name}")
             except Exception as e:
                 print(f"❌ Ошибка: {e}")
-    
     if before.channel:
         ch_id = str(before.channel.id)
         row = db_execute_one("SELECT owner_id FROM temp_channels WHERE channel_id = ?", (ch_id,))
@@ -157,11 +149,10 @@ async def on_voice_state_update(member, before, after):
             try:
                 await before.channel.delete()
                 db_execute("DELETE FROM temp_channels WHERE channel_id = ?", (ch_id,))
-                print(f"🗑️ Канал удалён")
             except:
                 pass
 
-# Команды
+# ВАРНЫ
 @bot.tree.command(name="warn", description="Выдать предупреждение")
 @app_commands.describe(user="Кому", reason="Причина")
 async def warn(interaction: discord.Interaction, user: discord.Member, reason: str = "Не указана"):
@@ -172,6 +163,14 @@ async def warn(interaction: discord.Interaction, user: discord.Member, reason: s
     db_execute("INSERT INTO warnings VALUES (NULL, ?, ?, ?, ?, ?)",
               (gid, uid, reason, interaction.user.name, datetime.now().strftime("%d.%m.%Y %H:%M:%S")))
     await interaction.response.send_message(f"⚠️ Варн выдан {user.mention}: {reason}")
+    try:
+        embed = discord.Embed(title="⚠️ Предупреждение", color=0xFFA500)
+        embed.add_field(name="Сервер", value=interaction.guild.name)
+        embed.add_field(name="Модератор", value=interaction.user.display_name)
+        embed.add_field(name="Причина", value=reason)
+        await user.send(embed=embed)
+    except:
+        pass
 
 @bot.tree.command(name="warn_remove", description="Снять варн")
 async def warn_remove(interaction: discord.Interaction, user: discord.Member):
@@ -180,12 +179,17 @@ async def warn_remove(interaction: discord.Interaction, user: discord.Member):
     db_execute("DELETE FROM warnings WHERE guild_id = ? AND user_id = ? AND id = (SELECT id FROM warnings WHERE guild_id = ? AND user_id = ? ORDER BY id DESC LIMIT 1)",
               (gid, uid, gid, uid))
     await interaction.response.send_message(f"✅ Варн снят с {user.mention}")
+    try:
+        await user.send(f"✅ С вас снято предупреждение на сервере **{interaction.guild.name}**")
+    except:
+        pass
 
 @bot.tree.command(name="warnings", description="Список варнов")
 async def warnings_list(interaction: discord.Interaction, user: discord.Member = None):
     if not user: user = interaction.user
-    await interaction.response.send_message(f"Варны: команда в разработке")
+    await interaction.response.send_message(f"📋 Варны {user.mention}: команда в разработке")
 
+# ТАЙМАУТ
 @bot.tree.command(name="timeout", description="Таймаут")
 async def timeout(interaction: discord.Interaction, user: discord.Member, time: str, reason: str = ""):
     if not has_permission(interaction): return
@@ -195,13 +199,26 @@ async def timeout(interaction: discord.Interaction, user: discord.Member, time: 
         return
     await user.timeout(timedelta(minutes=minutes), reason=reason)
     await interaction.response.send_message(f"🔇 {user.mention} таймаут на {format_time(minutes)}")
+    try:
+        embed = discord.Embed(title="🔇 Таймаут", color=0xFF6600)
+        embed.add_field(name="Сервер", value=interaction.guild.name)
+        embed.add_field(name="Длительность", value=format_time(minutes))
+        if reason: embed.add_field(name="Причина", value=reason)
+        await user.send(embed=embed)
+    except:
+        pass
 
 @bot.tree.command(name="untimeout", description="Снять таймаут")
 async def untimeout(interaction: discord.Interaction, user: discord.Member):
     if not has_permission(interaction): return
     await user.timeout(None)
     await interaction.response.send_message(f"🔊 Таймаут снят с {user.mention}")
+    try:
+        await user.send(f"🔊 С вас снят таймаут на сервере **{interaction.guild.name}**")
+    except:
+        pass
 
+# ГОЛОСОВОЙ МЬЮТ
 @bot.tree.command(name="vmute", description="Голосовой мьют")
 async def vmute(interaction: discord.Interaction, user: discord.Member, time: str):
     if not has_permission(interaction): return
@@ -209,13 +226,25 @@ async def vmute(interaction: discord.Interaction, user: discord.Member, time: st
     if minutes <= 0: return
     await user.edit(mute=True)
     await interaction.response.send_message(f"🎤 {user.mention} мьют на {format_time(minutes)}")
+    try:
+        embed = discord.Embed(title="🎤 Голосовой мьют", color=0x9933FF)
+        embed.add_field(name="Сервер", value=interaction.guild.name)
+        embed.add_field(name="Длительность", value=format_time(minutes))
+        await user.send(embed=embed)
+    except:
+        pass
 
 @bot.tree.command(name="vunmute", description="Снять мьют")
 async def vunmute(interaction: discord.Interaction, user: discord.Member):
     if not has_permission(interaction): return
     await user.edit(mute=False)
     await interaction.response.send_message(f"🎤 Мьют снят с {user.mention}")
+    try:
+        await user.send(f"🎤 С вас снят голосовой мьют на сервере **{interaction.guild.name}**")
+    except:
+        pass
 
+# УРОВНИ
 @bot.tree.command(name="rank", description="Уровень")
 async def rank(interaction: discord.Interaction):
     await interaction.response.send_message("🎖️ Система уровней активирована!")
