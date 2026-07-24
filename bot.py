@@ -9,7 +9,7 @@ import random
 
 ALLOWED_ROLES = ["⚔️Админ состав⚔️"]
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-DB_FILE = "/data/bot_data.db"
+DB_FILE = "bot_data.db"
 
 intents = discord.Intents.default()
 intents.message_content = True
