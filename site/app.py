@@ -187,6 +187,4 @@ def save_settings(guild_id):
     return redirect(url_for('dashboard', guild_id=guild_id))
 
 if __name__ == '__main__':
-    import os
-    port = int(os.environ.get("PORT", 80))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=80)
