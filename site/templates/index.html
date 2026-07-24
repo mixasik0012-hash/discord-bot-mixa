@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mixasik - Бот для Discord</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', sans-serif; background: #1a1a2e; color: #fff; min-height: 100vh; }
+        .navbar { padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; }
+        .navbar-brand { color: #5865F2; font-size: 1.5rem; font-weight: bold; text-decoration: none; }
+        .btn { padding: 10px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; }
+        .btn-primary { background: #5865F2; color: white; }
+        .hero { text-align: center; padding: 100px 20px; }
+        .hero h1 { font-size: 3rem; }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <a href="/" class="navbar-brand">🤖 {{ bot_name }}</a>
+        <div>
+            <a href="{{ invite_link }}" target="_blank" class="btn btn-primary">➕ Пригласить</a>
+            <a href="/login" class="btn btn-primary">🔐 Войти</a>
+        </div>
+    </nav>
+    <div class="hero">
+        <h1>{{ bot_name }}</h1>
+        <p>Многофункциональный бот для модерации Discord</p>
+    </div>
+</body>
+</html>
