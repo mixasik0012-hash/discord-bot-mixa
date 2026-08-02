@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import asyncio
 import re
 import random
+import threading
 
 ALLOWED_ROLES = ["⚔️Админ состав⚔️"]
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -252,5 +253,20 @@ async def rank(interaction: discord.Interaction):
 @bot.tree.command(name="top", description="Топ")
 async def top(interaction: discord.Interaction):
     await interaction.response.send_message("🏆 Топ пока пуст.")
+# Запуск сайта в отдельном потоке
+from flask import Flask, render_template, request, redirect, url_for, session
+from flask_cors import CORS
 
+site_app = Flask(__name__)
+site_app.secret_key = os.urandom(24).hex()
+CORS(site_app)
+
+@site_app.route('/')
+def index():
+    return "Сайт Mixasik работает!"
+
+def run_site():
+    site_app.run(host='0.0.0.0', port=8080)
+
+threading.Thread(target=run_site, daemon=True).start()
 bot.run(BOT_TOKEN)
